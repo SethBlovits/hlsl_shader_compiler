@@ -174,7 +174,7 @@ int main(){
     //we can iterate through all of our shaders
     
     FILE* fileptr;
-
+    
     for(int i = 0;i<bundle.num_shaders;i++){
         char header_file_name[MAX_PATH];
         strcpy(header_file_name,bundle.shader_resources[i].file_name);
