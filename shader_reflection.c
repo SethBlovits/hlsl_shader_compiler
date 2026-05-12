@@ -70,11 +70,12 @@ void set_bundle_data(char* file_handle,char* full_file_name,SHADER_TYPE shader_t
     shader_name[total_chars] = '\0';
     int shader_index = get_existing_shader_index(shader_name);
     if(shader_index == NOT_FOUND){
+        assert(bundle.num_shaders<25);
         shader_index = bundle.num_shaders;
         strcpy(bundle.shader_resources[shader_index].file_name,shader_name);
         bundle.num_shaders++;
     }
-    
+    printf("%ws\n",full_path);
     if(shader_type == VERTEX_SHADER){
         d3d12_throwIfFailed(D3DReadFileToBlob(full_path,&bundle.shader_resources[shader_index].vertex_shader));
     }
@@ -118,7 +119,7 @@ void write_uniform_resources_to_struct(FILE* fileptr, ID3D12ShaderReflection* re
         reflect->lpVtbl->GetResourceBindingDesc(reflect,i,&bind_desc);
         if(bind_desc.Type == D3D_SIT_CBUFFER || bind_desc.Type == D3D_SIT_UAV_RWTYPED || 
             bind_desc.Type == D3D_SIT_UAV_RWSTRUCTURED || bind_desc.Type == D3D_SIT_UAV_APPEND_STRUCTURED || 
-            bind_desc.Type == D3D_SIT_UAV_CONSUME_STRUCTURED || bind_desc.Type == D3D_SIT_UAV_RWSTRUCTURED_WITH_COUNTER){
+            bind_desc.Type == D3D_SIT_UAV_CONSUME_STRUCTURED || bind_desc.Type == D3D_SIT_UAV_RWSTRUCTURED_WITH_COUNTER || bind_desc.Type == D3D_SIT_STRUCTURED){
             
             fprintf(fileptr,"\tslg_buffer %s;\n",bind_desc.Name);    
         }
@@ -127,7 +128,7 @@ void write_uniform_resources_to_struct(FILE* fileptr, ID3D12ShaderReflection* re
         }
     }
 }
-void write_bind_function(FILE* fileptr,char* filename,char* upper_filename, ID3D12ShaderReflection* reflect){
+void write_bind_function(FILE* fileptr,char* upper_filename, ID3D12ShaderReflection* reflect){
     D3D12_SHADER_DESC reflection_desc = {0};
     reflect->lpVtbl->GetDesc(reflect,&reflection_desc);
     for(unsigned int i = 0;i<reflection_desc.BoundResources;i++){
@@ -135,10 +136,16 @@ void write_bind_function(FILE* fileptr,char* filename,char* upper_filename, ID3D
         reflect->lpVtbl->GetResourceBindingDesc(reflect,i,&bind_desc);
         //for now we aren't doing uav's
         if(bind_desc.Type == D3D_SIT_CBUFFER ){
-            fprintf(fileptr,"\tout_uniforms.crv_buffer[BINDSLOT_%s_%s] = uniform_desc.%s;\n",upper_filename,bind_desc.Name,bind_desc.Name);    
+            fprintf(fileptr,"\tout_uniforms.cbv_buffer[BINDSLOT_%s_%s] = uniform_desc.%s;\n",upper_filename,bind_desc.Name,bind_desc.Name);    
+        }
+        if(bind_desc.Type == D3D_SIT_STRUCTURED){
+            fprintf(fileptr,"\tout_uniforms.srv_buffer[BINDSLOT_%s_%s] = uniform_desc.%s;\n",upper_filename,bind_desc.Name,bind_desc.Name);
         }
         else if(bind_desc.Type == D3D_SIT_TEXTURE){
             fprintf(fileptr,"\tout_uniforms.srv_buffer[BINDSLOT_%s_%s] = uniform_desc.%s;\n",upper_filename,bind_desc.Name,bind_desc.Name); 
+        }
+        else if(bind_desc.Type == D3D_SIT_SAMPLER){
+            fprintf(fileptr,"\tout_uniforms.samplers[BINDSLOT_%s_%s] = true;\n",upper_filename,bind_desc.Name);
         }
     }
 }
@@ -152,7 +159,7 @@ int main(){
     HANDLE hFind = FindFirstFileA(".\\*.*", &FindFileData);
     bool found_file = FindNextFile(hFind, &FindFileData);
     while(found_file){
-        char* file_handle = strstr(FindFileData.cFileName,"_vs");
+        char* file_handle = strstr(FindFileData.cFileName,"_vs.cso");
 
         if(file_handle){
             set_bundle_data(file_handle,FindFileData.cFileName,VERTEX_SHADER);
@@ -160,7 +167,7 @@ int main(){
             continue;
         }
 
-        file_handle = strstr(FindFileData.cFileName,"_ps");
+        file_handle = strstr(FindFileData.cFileName,"_ps.cso");
         if(file_handle){ 
             set_bundle_data(file_handle,FindFileData.cFileName,PIXEL_SHADER);
             found_file = FindNextFile(hFind,&FindFileData);
@@ -170,15 +177,78 @@ int main(){
         found_file = FindNextFile(hFind,&FindFileData);
     }
 
-    //At this point we have all the files we need! We can make headers for each of the files with reflection data
-    //we can iterate through all of our shaders
     
     FILE* fileptr;
     
+    //before we go through all the files, we should make a central shader registry file
+    fileptr = fopen("Shader_Registry.h","wb");
+
+
+    fprintf(fileptr,"#ifndef SHADER_REGISTRY_H\n");
+    fprintf(fileptr,"#define SHADER_REGISTRY_H\n\n");
+        
+
+    fprintf(fileptr,"\n#include \"slugs_graphics.h\"\n");
+
+    //we need the shader name as well as the shader desc
+    //go through each shader and add the include for the helper
     for(int i = 0;i<bundle.num_shaders;i++){
         char header_file_name[MAX_PATH];
         strcpy(header_file_name,bundle.shader_resources[i].file_name);
-        strcat_s(header_file_name,sizeof(header_file_name),".h");
+        strcat_s(header_file_name,sizeof(header_file_name),"_hlsl.h");
+        
+        fprintf(fileptr,"#include \"%s\"\n",header_file_name);
+    }
+    fprintf(fileptr,"\n");
+    fprintf(fileptr,"typedef struct{\n\tconst char* hlsl_filename;\n\tslg_shader_desc shader_desc;\n}shader_registry_entry;\n");
+
+    fprintf(fileptr,"shader_registry_entry shader_registry[%d];\n\n",bundle.num_shaders);
+    fprintf(fileptr,"void init_shader_registry();\n");
+    fprintf(fileptr,"slg_shader get_shader_from_registry(char* shader_name);\n");
+    fprintf(fileptr,"#ifdef SHADER_REGISTRY_IMPLEMENTATION\n");
+    fprintf(fileptr,"\nvoid init_shader_registry(){\n");
+    fprintf(fileptr,"    int shader_registry_count = 4\n");
+    for(int i = 0;i<bundle.num_shaders;i++){
+        char uppr_file_name[MAX_PATH]; 
+        memset(uppr_file_name,0,MAX_PATH);
+        for(int c = 0;c<strlen(bundle.shader_resources[i].file_name);c++){
+            uppr_file_name[c] = (char)toupper((unsigned char)bundle.shader_resources[i].file_name[c]);
+        }
+        char header_file_name[MAX_PATH];
+        strcpy(header_file_name,bundle.shader_resources[i].file_name);
+        strcat_s(header_file_name,sizeof(header_file_name),"_hlsl.h");
+        fprintf(fileptr,"\tshader_registry[%d] = (shader_registry_entry)",i);
+        fprintf(fileptr,"{\"%s\",%s_SHADER_DESC};\n",header_file_name,uppr_file_name);
+    }   
+    fprintf(fileptr,"};\n");
+
+    fprintf(fileptr,"slg_shader get_shader_from_registry(char* shader_name){\n");
+    fprintf(fileptr,"    int shader_registry_count = 0;\n");
+    fprintf(fileptr,"    for(int i = 0;i<shader_registry_count;i++){\n");
+    fprintf(fileptr,"        if(!strcmp(shader_registry[i].hlsl_filename,shader_name)){\n");
+    fprintf(fileptr,"            return shader_registry[i].shd;\n");
+    fprintf(fileptr,"        }\n");
+    fprintf(fileptr,"    }\n");
+    fprintf(fileptr,"    return (slg_shader){0};\n");
+    fprintf(fileptr,"}\n");
+    fprintf(fileptr,"#endif //SHADER_REGISTRY_IMPLEMENTATION\n");
+    fprintf(fileptr,"#endif //SHADER_REGISTRY_H\n");
+
+
+    //now we need to go ahead an make the init function
+
+
+
+    fclose(fileptr);
+
+
+    //At this point we have all the files we need! We can make headers for each of the files with reflection data
+    //we can iterate through all of our shaders
+    for(int i = 0;i<bundle.num_shaders;i++){
+        char header_file_name[MAX_PATH];
+        
+        strcpy(header_file_name,bundle.shader_resources[i].file_name);
+        strcat_s(header_file_name,sizeof(header_file_name),"_hlsl.h");
         fileptr = fopen(header_file_name,"wb");
         if(!fileptr){
             assert(false);
@@ -192,7 +262,7 @@ int main(){
             vert_blob->lpVtbl->GetBufferSize(vert_blob),
             &IID_ID3D12ShaderReflection,
             (void**)&vert_reflection));
-        d3d12_throwIfFailed(D3DReflect(vert_blob->lpVtbl->GetBufferPointer(frag_blob),
+        d3d12_throwIfFailed(D3DReflect(frag_blob->lpVtbl->GetBufferPointer(frag_blob),
             frag_blob->lpVtbl->GetBufferSize(frag_blob),
             &IID_ID3D12ShaderReflection,
             (void**)&frag_reflection));
@@ -250,10 +320,10 @@ int main(){
         fprintf(fileptr,"}%s_HLSL_UNIFORMS;\n",uppr_file_name);
 
         //at this point we need to go through again to make the function
-        fprintf(fileptr,"\nslg_unforms %s_HLSL_MAKE_UNIFORMS(%s_HLSL_UNIFORMS uniform_desc){\n",uppr_file_name,uppr_file_name);
+        fprintf(fileptr,"\nslg_uniforms %s_HLSL_MAKE_UNIFORMS(%s_HLSL_UNIFORMS uniform_desc){\n",uppr_file_name,uppr_file_name);
         fprintf(fileptr,"\tslg_uniforms out_uniforms = {0};\n");
-        write_bind_function(fileptr,bundle.shader_resources[i].file_name,uppr_file_name,vert_reflection);
-        write_bind_function(fileptr,bundle.shader_resources[i].file_name,uppr_file_name,frag_reflection);
+        write_bind_function(fileptr,uppr_file_name,vert_reflection);
+        write_bind_function(fileptr,uppr_file_name,frag_reflection);
         fprintf(fileptr,"\treturn out_uniforms;\n");
         fprintf(fileptr,"}\n");
 
