@@ -200,7 +200,11 @@ int main(){
         fprintf(fileptr,"#include \"%s\"\n",header_file_name);
     }
     fprintf(fileptr,"\n");
-    fprintf(fileptr,"typedef struct{\n\tconst char* hlsl_filename;\n\tslg_shader_desc shader_desc;\n}shader_registry_entry;\n");
+    fprintf(fileptr, "typedef struct{\n");
+    fprintf(fileptr, "\tconst char* hlsl_filename;\n");
+    fprintf(fileptr, "\tslg_shader_desc shader_desc;\n");
+    fprintf(fileptr, "\tslg_shader shd;\n");
+    fprintf(fileptr, "}shader_registry_entry;\n");
 
     fprintf(fileptr,"shader_registry_entry shader_registry[%d];\n\n",bundle.num_shaders);
     fprintf(fileptr,"void init_shader_registry();\n");
@@ -219,8 +223,11 @@ int main(){
         strcat_s(header_file_name,sizeof(header_file_name),"_hlsl.h");
         fprintf(fileptr,"\tshader_registry[%d] = (shader_registry_entry)",i);
         fprintf(fileptr,"{\"%s\",%s_SHADER_DESC};\n",header_file_name,uppr_file_name);
-    }   
-    fprintf(fileptr,"};\n");
+    }
+    fprintf(fileptr, "    for(int i = 0;i<shader_registry_count;i++){\n");
+    fprintf(fileptr, "    \tshader_registry[i].shd = slg_make_shader(&shader_registry[i].shader_desc);\n");
+    fprintf(fileptr, "    }\n");   
+    fprintf(fileptr,"}\n");
 
     fprintf(fileptr,"slg_shader get_shader_from_registry(char* shader_name){\n");
     fprintf(fileptr,"    int shader_registry_count = 0;\n");
