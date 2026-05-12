@@ -211,7 +211,7 @@ int main(){
     fprintf(fileptr,"slg_shader get_shader_from_registry(char* shader_name);\n");
     fprintf(fileptr,"#ifdef SHADER_REGISTRY_IMPLEMENTATION\n");
     fprintf(fileptr,"\nvoid init_shader_registry(){\n");
-    fprintf(fileptr,"    int shader_registry_count = 4\n");
+    fprintf(fileptr,"    int shader_registry_count = 4;\n");
     for(int i = 0;i<bundle.num_shaders;i++){
         char uppr_file_name[MAX_PATH]; 
         memset(uppr_file_name,0,MAX_PATH);
